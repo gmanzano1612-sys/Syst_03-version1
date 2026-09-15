@@ -134,7 +134,7 @@ export default function Dashboard({ auth }) {
         { id: 14, name: 'Incidencias de Laboratorio', description: 'Descripcion 14', icon: 'fa-solid fa-flask', routeName: 'laboratorio', badge: 'Sistema', category: 'sistema' },
         { id: 15, name: 'IDC', description: 'Descripcion 15', icon: 'fa-solid fa-file-shield', routeName: 'idc', badge: 'Seguridad', category: 'seguridad' },
         { id: 16, name: 'Busqueda Patente Aduanal', description: 'Descripcion 16', icon: 'fa-solid fa-user', routeName: 'patente', badge: 'Comunicación', category: 'sistema' },
-        { id: 17, name: 'Pendiente 1', description: 'Descripcion 17', icon: 'fa-scale-balanced', routeName: 'basculas', badge: 'Pendeiente', category: 'pendeiente' },
+        { id: 17, name: 'Cuotas Compensatorias', description: 'Calculo de Cuotas Compensatorias Correspondientes', icon: 'fa-scale-balanced', routeName: 'Cuotas', badge: 'Despacho', category: 'Despacho' },
         { id: 18, name: 'Pendiente 2', description: 'Descripcion 18', icon: 'fa-calendar-days', routeName: 'turnos', badge: 'Pendeiente', category: 'pendeiente' },
         { id: 19, name: 'Pendiente 3', description: 'Descripcion 19', icon: 'fa-user-shield', routeName: 'usuarios', badge: 'Pendeiente', category: 'pendeiente' },
         { id: 20, name: 'Pendiente 4', description: 'Descripcion 20', icon: 'fa-clock-rotate-left', routeName: 'bitacora', badge: 'Pendeiente', category: 'pendeiente' },
@@ -316,6 +316,13 @@ export default function Dashboard({ auth }) {
                                             className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'pendeiente' ? 'bg-[#621132] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
                                         >
                                             <i className="fa-solid fa-person-digging"></i> Pendientes
+                                        </button>
+
+                                        <button 
+                                            onClick={() => setActiveTab('Despacho')}
+                                            className={`w-full text-left px-3 py-2 rounded-xl text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${activeTab === 'Despacho' ? 'bg-[#621132] text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'}`}
+                                        >
+                                            <i className="fa-solid fa-person-digging"></i> Despacho
                                         </button>
                                     </div>
                                 </div>
