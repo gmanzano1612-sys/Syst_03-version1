@@ -1,6 +1,15 @@
 import { Head, Link, router } from '@inertiajs/react';
 import { useState, useEffect, useRef, useMemo } from 'react';
 
+// Cargar FontAwesome dinámicamente si no está en el HTML principal
+if (typeof window !== 'undefined' && !document.getElementById('font-awesome-cdn')) {
+    const link = document.createElement('link');
+    link.id = 'font-awesome-cdn';
+    link.rel = 'stylesheet';
+    link.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css';
+    document.head.appendChild(link);
+}
+
 // ==========================================
 // COMPONENTE: Red de Partículas (Fondo)
 // ==========================================
@@ -63,19 +72,36 @@ function ParticleBackground() {
     return <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-0 w-full h-full opacity-70" />;
 }
 
-export default function ManifiestosIndex({ auth }) {
+export default function ManifiestosIndex({ auth, bitacoraInicial = [] }) {
     // ------------------------------------------
-    // ESTADOS Y DATOS
+    // NORMALIZAR DATOS ENTRANTES DE LARAVEL
+    // ------------------------------------------
+    const obtenerLista = (datos) => {
+        if (!datos) return [];
+        if (Array.isArray(datos)) return datos;
+        if (datos.data && Array.isArray(datos.data)) return datos.data;
+        return [];
+    };
+
+    // ------------------------------------------
+    // ESTADOS Y DATOS (Sin bucles en useEffect)
     // ------------------------------------------
     const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
-    const [isDocModalOpen, setIsDocModalOpen] = useState(false); // Estado para el modal de Verificador
+    const [isDocModalOpen, setIsDocModalOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
 
     // Estados del Verificador de Documentos
     const [selectedDoc, setSelectedDoc] = useState(null);
     const [docLoading, setDocLoading] = useState(false);
     const [docResult, setDocResult] = useState(null);
     const [docError, setDocError] = useState(null);
+
+    // Estados para Autocompletado de Fracción Arancelaria
+    const [fraccionesOptions, setFraccionesOptions] = useState([]);
+    const [showFraccionDropdown, setShowFraccionDropdown] = useState(false);
+    const [isSearchingFraccion, setIsSearchingFraccion] = useState(false);
+    const dropdownRef = useRef(null);
 
     // Estado del Formulario de Cálculo
     const [formData, setFormData] = useState({
@@ -97,71 +123,74 @@ export default function ManifiestosIndex({ auth }) {
         tipoCambio: '18.50'
     });
 
-    // Bitácora / Histórico simulado
-    const [bitacora, setBitacora] = useState([
-        {
-            id: 1,
-            fecha: '14/09/2026',
-            pedimento: '4001234',
-            empresa: 'Aceros Global S.A.',
-            fraccion: '7210.70.01',
-            producto: 'Lámina de acero',
-            pais: 'China',
-            operacion: 'Importación',
-            capitulo: '72',
-            partida: '7210',
-            subpartida: '721070',
-            sector: 'Siderúrgico',
-            uma: 'KG',
-            cantidad: '50000',
-            tipoCuotaLabel: 'Monto ($)',
-            cuotaC: '0.15',
-            moneda: 'USD',
-            tipoCambio: '18.50',
-            resultado: '$7,500.00 USD',
-            totalMXN: '$138,750.00 MXN'
-        },
-        {
-            id: 2,
-            fecha: '12/09/2026',
-            pedimento: '4005678',
-            empresa: 'Textiles del Norte S.A. de C.V.',
-            fraccion: '5515.11.01',
-            producto: 'Tejido de poliéster',
-            pais: 'Vietnam',
-            operacion: 'Importación',
-            capitulo: '55',
-            partida: '5515',
-            subpartida: '551511',
-            sector: 'Textil',
-            uma: 'M2',
-            cantidad: '12000',
-            tipoCuotaLabel: 'Porcentaje (%)',
-            cuotaC: '25',
-            moneda: 'USD',
-            tipoCambio: '18.45',
-            resultado: '$3,000.00 USD',
-            totalMXN: '$55,350.00 MXN'
+    // Inicializamos el estado directamente desde las props sin useEffect cíclico
+    const [bitacora, setBitacora] = useState(() => obtenerLista(bitacoraInicial));
+
+    // Ocultar desplegable al hacer clic fuera del campo
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+                setShowFraccionDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Búsqueda en backend con Debounce (Fracción Arancelaria)
+    useEffect(() => {
+        const query = formData.fraccion.trim();
+        if (query.length < 2) {
+            setFraccionesOptions([]);
+            setShowFraccionDropdown(false);
+            return;
         }
-    ]);
 
-    // Logout
-    const handleLogout = (e) => {
-        e.preventDefault();
-        router.post(route('logout'));
-    };
+        const timer = setTimeout(async () => {
+            setIsSearchingFraccion(true);
+            try {
+                const res = await fetch(`/api/fracciones-arancelarias?search=${encodeURIComponent(query)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setFraccionesOptions(data);
+                    setShowFraccionDropdown(true);
+                }
+            } catch (err) {
+                console.error("Error al buscar fracción arancelaria:", err);
+            } finally {
+                setIsSearchingFraccion(false);
+            }
+        }, 300);
 
-    // Handlers para el Formulario de Cálculo
+        return () => clearTimeout(timer);
+    }, [formData.fraccion]);
+
+    // Manejar cambio en el input de Fracción
     const handleFraccionChange = (e) => {
         const value = e.target.value;
         const raw = value.replace(/\D/g, '');
         setFormData(prev => ({
             ...prev,
             fraccion: value,
+            capitulo: raw.length >= 2 ? raw.substring(0, 2) : prev.capitulo,
+            partida: raw.length >= 4 ? raw.substring(0, 4) : prev.partida,
+            subpartida: raw.length >= 6 ? raw.substring(0, 6) : prev.subpartida
+        }));
+    };
+
+    // Seleccionar opción del autocompletado
+    const handleSelectFraccion = (item) => {
+        const raw = (item.fraccion_arancelaria || '').replace(/\D/g, '');
+        setFormData(prev => ({
+            ...prev,
+            fraccion: item.fraccion_arancelaria || '',
             capitulo: raw.length >= 2 ? raw.substring(0, 2) : '',
             partida: raw.length >= 4 ? raw.substring(0, 4) : '',
-            subpartida: raw.length >= 6 ? raw.substring(0, 6) : ''
+            subpartida: raw.length >= 6 ? raw.substring(0, 6) : '',
+            producto: item.descripción || prev.producto,
+            uma: item.unidad_de_medida || prev.uma
         }));
+        setShowFraccionDropdown(false);
     };
 
     const handleInputChange = (e) => {
@@ -169,7 +198,7 @@ export default function ManifiestosIndex({ auth }) {
         setFormData(prev => ({ ...prev, [id]: value }));
     };
 
-    // Handler para enviar documento a la API FastAPI
+    // Handler para enviar documento al analizador forense
     const handleDocSubmit = async (e) => {
         e.preventDefault();
         if (!selectedDoc) {
@@ -195,8 +224,6 @@ export default function ManifiestosIndex({ auth }) {
             }
 
             const data = await response.json();
-            
-            // Compatible con data.is_altered o data.is_valid
             const isAltered = data.is_altered !== undefined ? data.is_altered : !data.is_valid;
 
             setDocResult({
@@ -206,13 +233,12 @@ export default function ManifiestosIndex({ auth }) {
             });
         } catch (error) {
             console.error("Error al conectar con la API:", error);
-            setDocError("Ocurrió un error al conectar con la API. Asegúrate de que el servidor uvicorn esté en ejecución.");
+            setDocError("Ocurrió un error al conectar con la API.");
         } finally {
             setDocLoading(false);
         }
     };
 
-    // Resetear formulario de documento
     const closeDocModal = () => {
         setIsDocModalOpen(false);
         setSelectedDoc(null);
@@ -247,9 +273,51 @@ export default function ManifiestosIndex({ auth }) {
     const totalMXNFormatted = `$${totalMXNNum.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} MXN`;
 
     // ------------------------------------------
-    // FUNCIÓN PARA GENERAR E IMPRIMIR PDF
+    // GENERAR PDF
     // ------------------------------------------
-    const generarPDF = (itemData) => {
+    const generarPDF = (itemData = null) => {
+        const payload = itemData ? {
+            fecha: itemData.fecha || itemData.fecha_creacion || new Date().toLocaleDateString('es-MX'),
+            pedimento: itemData.pedimento || 'Sin especificar',
+            fraccion: itemData.n_fraccion || itemData.fraccion || 'Sin especificar',
+            capitulo: itemData.capitulo || '-',
+            partida: itemData.partida || '-',
+            subpartida: itemData.subpartida || '-',
+            sector: itemData.sector || 'N/A',
+            producto: itemData.producto || 'N/A',
+            pais: itemData.pais || 'N/A',
+            empresa: itemData.empresa || 'N/A',
+            operacion: itemData.operacion || 'Importación',
+            uma: itemData.uma || 'KG',
+            cantidad: itemData.cantidad_valor_base || itemData.cantidad || '0',
+            tipoCuotaLabel: itemData.tipo_cuota === 'monto' ? 'Monto ($)' : 'Porcentaje (%)',
+            cuotaC: itemData.cuota_c || itemData.cuotaC || '0',
+            moneda: 'USD',
+            tipoCambio: itemData.tipo_cambio_mxn || itemData.tipoCambio || '18.50',
+            resultado: `$${parseFloat(itemData.monto_cuota_usd || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`,
+            totalMXN: itemData.totalMXN || `$${parseFloat(itemData.total_a_pagar_mxn || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`
+        } : {
+            fecha: new Date().toLocaleDateString('es-MX'),
+            pedimento: formData.pedimento || 'Sin especificar',
+            fraccion: formData.fraccion || 'Sin especificar',
+            capitulo: formData.capitulo || '-',
+            partida: formData.partida || '-',
+            subpartida: formData.subpartida || '-',
+            sector: formData.sector || 'N/A',
+            producto: formData.producto || 'N/A',
+            pais: formData.pais || 'N/A',
+            empresa: formData.empresa || 'N/A',
+            operacion: formData.operacion,
+            uma: formData.uma,
+            cantidad: formData.cantidad || '0',
+            tipoCuotaLabel: formData.tipoCuota === 'monto' ? 'Monto ($)' : 'Porcentaje (%)',
+            cuotaC: formData.cuotaC || '0',
+            moneda: formData.moneda,
+            tipoCambio: formData.tipoCambio || '18.50',
+            resultado: resultadoFormatted,
+            totalMXN: totalMXNFormatted
+        };
+
         const prev = document.getElementById('printContainer');
         if (prev) prev.remove();
 
@@ -274,7 +342,7 @@ export default function ManifiestosIndex({ auth }) {
             </style>
             <div class="pdf-header">
                 <h2>Ficha de Cálculo - Cuota Compensatoria</h2>
-                <p>Centro de Procesamiento de Datos | Emisión: ${itemData.fecha || new Date().toLocaleDateString('es-MX')}</p>
+                <p>Centro de Procesamiento de Datos | Emisión: ${payload.fecha}</p>
             </div>
 
             <table class="pdf-table">
@@ -284,21 +352,21 @@ export default function ManifiestosIndex({ auth }) {
                 <tbody>
                     <tr>
                         <td class="label-col">Pedimento:</td>
-                        <td>${itemData.pedimento || 'N/A'}</td>
+                        <td>${payload.pedimento}</td>
                         <td class="label-col">Operación:</td>
-                        <td>${itemData.operacion || 'Importación'}</td>
+                        <td>${payload.operacion}</td>
                     </tr>
                     <tr>
                         <td class="label-col">Empresa:</td>
-                        <td>${itemData.empresa || 'N/A'}</td>
+                        <td>${payload.empresa}</td>
                         <td class="label-col">País de Origen:</td>
-                        <td>${itemData.pais || 'N/A'}</td>
+                        <td>${payload.pais}</td>
                     </tr>
                     <tr>
                         <td class="label-col">Sector:</td>
-                        <td>${itemData.sector || 'N/A'}</td>
+                        <td>${payload.sector}</td>
                         <td class="label-col">Producto:</td>
-                        <td>${itemData.producto || 'N/A'}</td>
+                        <td>${payload.producto}</td>
                     </tr>
                 </tbody>
 
@@ -308,9 +376,9 @@ export default function ManifiestosIndex({ auth }) {
                 <tbody>
                     <tr>
                         <td class="label-col">Fracción Arancelaria:</td>
-                        <td><strong>${itemData.fraccion || 'N/A'}</strong></td>
+                        <td><strong>${payload.fraccion}</strong></td>
                         <td class="label-col">Desglose:</td>
-                        <td>Cap. ${itemData.capitulo || '-'} | Part. ${itemData.partida || '-'} | Subp. ${itemData.subpartida || '-'}</td>
+                        <td>Cap. ${payload.capitulo} | Part. ${payload.partida} | Subp. ${payload.subpartida}</td>
                     </tr>
                 </tbody>
 
@@ -320,25 +388,25 @@ export default function ManifiestosIndex({ auth }) {
                 <tbody>
                     <tr>
                         <td class="label-col">UMA / Medida:</td>
-                        <td>${itemData.uma || 'KG'}</td>
+                        <td>${payload.uma}</td>
                         <td class="label-col">Cantidad / Valor Base:</td>
-                        <td>${itemData.cantidad || '0'}</td>
+                        <td>${payload.cantidad}</td>
                     </tr>
                     <tr>
                         <td class="label-col">Tipo de Cuota:</td>
-                        <td>${itemData.tipoCuotaLabel}</td>
+                        <td>${payload.tipoCuotaLabel}</td>
                         <td class="label-col">Cuota C:</td>
-                        <td>${itemData.cuotaC} ${itemData.tipoCuota === 'monto' ? itemData.moneda : '%'}</td>
+                        <td>${payload.cuotaC} ${payload.tipoCuotaLabel.includes('Monto') ? payload.moneda : '%'}</td>
                     </tr>
                     <tr>
                         <td class="label-col">Monto Resultado:</td>
-                        <td>${itemData.resultado}</td>
+                        <td>${payload.resultado}</td>
                         <td class="label-col">Tipo Cambio (DOF):</td>
-                        <td>$${itemData.tipoCambio} MXN</td>
+                        <td>$${payload.tipoCambio} MXN</td>
                     </tr>
                     <tr class="highlight-row">
                         <td class="label-col">TOTAL ESTIMADO A PAGAR:</td>
-                        <td colspan="3" style="font-size: 14px;"><strong>${itemData.totalMXN}</strong></td>
+                        <td colspan="3" style="font-size: 14px;"><strong>${payload.totalMXN}</strong></td>
                     </tr>
                 </tbody>
             </table>
@@ -352,66 +420,97 @@ export default function ManifiestosIndex({ auth }) {
         window.print();
     };
 
-    // Guardar nuevo registro desde el modal y emitir PDF
-    const guardarFichaYGenerarPDF = () => {
-        const nuevoRegistro = {
-            id: Date.now(),
-            fecha: new Date().toLocaleDateString('es-MX'),
-            pedimento: formData.pedimento || 'Sin especificar',
-            fraccion: formData.fraccion || 'Sin especificar',
-            capitulo: formData.capitulo || '-',
-            partida: formData.partida || '-',
-            subpartida: formData.subpartida || '-',
-            sector: formData.sector || 'N/A',
-            producto: formData.producto || 'N/A',
-            pais: formData.pais || 'N/A',
-            empresa: formData.empresa || 'N/A',
+    // ------------------------------------------
+    // GUARDAR EN BASE DE DATOS MEDIANTE INERTIA
+    // ------------------------------------------
+    const handleGuardarEnBD = () => {
+        setIsSaving(true);
+        const payload = {
+            pedimento: formData.pedimento,
+            n_fraccion: formData.fraccion,
             operacion: formData.operacion,
+            capitulo: formData.capitulo,
+            partida: formData.partida,
+            subpartida: formData.subpartida,
+            sector: formData.sector,
+            producto: formData.producto,
+            pais: formData.pais,
+            empresa: formData.empresa,
             uma: formData.uma,
-            cantidad: formData.cantidad || '0',
-            tipoCuota: formData.tipoCuota,
-            tipoCuotaLabel: formData.tipoCuota === 'monto' ? 'Monto ($)' : 'Porcentaje (%)',
-            cuotaC: formData.cuotaC || '0',
-            moneda: formData.moneda,
-            tipoCambio: formData.tipoCambio || '18.50',
-            resultado: resultadoFormatted,
-            totalMXN: totalMXNFormatted
+            cantidad_valor_base: formData.cantidad ? parseFloat(formData.cantidad) : null,
+            tipo_cuota: formData.tipoCuota,
+            cuota_c: formData.cuotaC ? parseFloat(formData.cuotaC) : null,
+            monto_cuota_usd: totalCalculado,
+            tipo_cambio_mxn: formData.tipoCambio ? parseFloat(formData.tipoCambio) : null,
+            total_a_pagar_mxn: totalMXNNum
         };
 
-        setBitacora([nuevoRegistro, ...bitacora]);
-        setIsCalcModalOpen(false);
-        generarPDF(nuevoRegistro);
+        const baseUrl = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/'));
+
+        router.post(`${baseUrl}/cuotas-compensatorias`, payload, {
+            preserveScroll: true,
+            preserveState: false, // Forzamos recarga limpia de props para actualizar la bitácora
+            onSuccess: (page) => {
+                setIsSaving(false);
+                setIsCalcModalOpen(false);
+
+                // Actualizamos la bitácora directamente con la nueva prop que manda Laravel
+                if (page.props.bitacoraInicial) {
+                    setBitacora(obtenerLista(page.props.bitacoraInicial));
+                }
+
+                setFormData({
+                    pedimento: '',
+                    fraccion: '',
+                    operacion: 'Importación',
+                    capitulo: '',
+                    partida: '',
+                    subpartida: '',
+                    sector: '',
+                    producto: '',
+                    pais: '',
+                    empresa: '',
+                    uma: 'KG',
+                    cantidad: '',
+                    tipoCuota: 'monto',
+                    cuotaC: '',
+                    moneda: 'USD',
+                    tipoCambio: '18.50'
+                });
+            },
+            onError: (err) => {
+                console.error("Error al guardar:", err);
+                setIsSaving(false);
+                alert("Ocurrió un error al guardar en la base de datos.");
+            }
+        });
     };
 
-    // ------------------------------------------
-    // FILTRADO DE LA BITÁCORA
-    // ------------------------------------------
     const bitacoraFiltrada = useMemo(() => {
-        if (!searchTerm.trim()) return bitacora;
+        const listaActual = obtenerLista(bitacoraInicial).length > 0 ? obtenerLista(bitacoraInicial) : bitacora;
+        if (!searchTerm.trim()) return listaActual;
         const query = searchTerm.toLowerCase();
-        return bitacora.filter(item => 
-            item.pedimento.toLowerCase().includes(query) ||
-            item.empresa.toLowerCase().includes(query) ||
-            item.fraccion.toLowerCase().includes(query) ||
-            item.producto.toLowerCase().includes(query) ||
-            item.pais.toLowerCase().includes(query)
+        return listaActual.filter(item => 
+            (item.pedimento && item.pedimento.toLowerCase().includes(query)) ||
+            (item.empresa && item.empresa.toLowerCase().includes(query)) ||
+            (item.n_fraccion && item.n_fraccion.toLowerCase().includes(query)) ||
+            (item.fraccion && item.fraccion.toLowerCase().includes(query)) ||
+            (item.producto && item.producto.toLowerCase().includes(query)) ||
+            (item.pais && item.pais.toLowerCase().includes(query))
         );
-    }, [searchTerm, bitacora]);
+    }, [searchTerm, bitacoraInicial, bitacora]);
+    console.log("PROPS QUE RECIBE REACT:", bitacoraInicial);
 
     return (
         <>
-            <Head title="Cuotas Compensatorias — Centro de Procesamiento de Datos">
-                <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-                <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet" />
-            </Head>
+            <Head title="Cuotas Compensatorias — Centro de Procesamiento de Datos" />
 
             <div className="h-screen bg-gradient-to-br from-gray-50 via-white to-red-50/20 font-['Plus_Jakarta_Sans'] overflow-hidden flex flex-col justify-between relative">
                 <ParticleBackground />
 
-                {/* HEADER SUPERIOR */}
                 <header className="w-full bg-white/80 backdrop-blur-md border-b border-gray-200/60 fixed top-0 left-0 right-0 z-30 px-6 lg:px-10 py-3 flex justify-between items-center shadow-xs">
                     <div className="flex items-center gap-3">
-                        <Link href={route('dashboard')} className="w-10 h-10 rounded-xl bg-white border border-gray-200/80 flex items-center justify-center overflow-hidden shadow-xs p-1 hover:border-[#621132] transition-colors">
+                        <Link href={typeof route === 'function' ? route('dashboard') : '/dashboard'} className="w-10 h-10 rounded-xl bg-white border border-gray-200/80 flex items-center justify-center overflow-hidden shadow-xs p-1 hover:border-[#621132] transition-colors">
                             <img src="logo.png" alt="Logo" className="w-full h-full object-contain" />
                         </Link>
                         <div>
@@ -426,17 +525,15 @@ export default function ManifiestosIndex({ auth }) {
 
                     <div className="flex items-center gap-3">
                         <Link 
-                            href={route('dashboard')}
+                            href={typeof route === 'function' ? route('dashboard') : '/dashboard'}
                             className="text-xs font-semibold text-gray-600 hover:text-[#621132] transition-colors flex items-center gap-2 bg-white hover:bg-gray-50 px-3.5 py-2 rounded-xl border border-gray-200 shadow-xs cursor-pointer"
                         >
                             <i className="fa-solid fa-arrow-left text-[#621132]"></i>
                             <span>Dashboard</span>
                         </Link>
-
                     </div>
                 </header>
 
-                {/* CONTENIDO PRINCIPAL: LAYOUT DE 2 COLUMNAS */}
                 <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-20 pb-4 relative z-20 flex-grow overflow-hidden flex flex-col">
                     
                     <div className="mb-4">
@@ -448,13 +545,9 @@ export default function ManifiestosIndex({ auth }) {
                         </p>
                     </div>
 
-                    {/* GRID DOS COLUMNAS */}
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-grow overflow-hidden">
                         
-                        {/* COLUMNA IZQUIERDA (OPCIONES EN BAJADA / MENÚ VERTICAL) */}
                         <div className="lg:col-span-4 flex flex-col gap-3">
-                            
-                            {/* Botón 1: Calcular Cuota */}
                             <button
                                 onClick={() => setIsCalcModalOpen(true)}
                                 className="w-full text-left bg-gradient-to-r from-[#621132] to-[#4d0d27] rounded-2xl p-4 text-white shadow-md hover:shadow-xl transition-all cursor-pointer transform hover:-translate-y-0.5 group relative overflow-hidden flex items-center gap-4"
@@ -469,7 +562,6 @@ export default function ManifiestosIndex({ auth }) {
                                 <i className="fa-solid fa-chevron-right text-xs text-[#B38E5D]"></i>
                             </button>
 
-                            {/* Botón 2: Verificador (Abre el modal de verificación) */}
                             <button
                                 onClick={() => setIsDocModalOpen(true)}
                                 className="w-full bg-white/90 backdrop-blur-md rounded-2xl p-4 border border-gray-200/80 shadow-xs hover:border-[#B38E5D] transition-all cursor-pointer flex items-center gap-4 group text-left"
@@ -483,7 +575,6 @@ export default function ManifiestosIndex({ auth }) {
                                 </div>
                             </button>
 
-                            {/* Botón 3: Proveedores */}
                             <div className="w-full bg-white/90 backdrop-blur-md rounded-2xl p-4 border border-gray-200/80 shadow-xs hover:border-[#B38E5D] transition-all cursor-pointer flex items-center gap-4 group">
                                 <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-[#B38E5D] shrink-0 group-hover:scale-110 transition-transform">
                                     <i className="fa-solid fa-address-book text-xl"></i>
@@ -494,7 +585,6 @@ export default function ManifiestosIndex({ auth }) {
                                 </div>
                             </div>
 
-                            {/* Tarjeta Informativa Resumen */}
                             <div className="bg-gradient-to-br from-amber-500/10 to-transparent border border-[#B38E5D]/30 rounded-2xl p-4 mt-auto">
                                 <div className="flex items-center gap-2 text-[#621132] font-semibold text-xs mb-1">
                                     <i className="fa-solid fa-circle-info"></i>
@@ -504,13 +594,9 @@ export default function ManifiestosIndex({ auth }) {
                                     Las operaciones registradas quedan almacenadas en la bitácora lateral para su descarga en PDF en cualquier momento.
                                 </p>
                             </div>
-
                         </div>
 
-                        {/* COLUMNA DERECHA (BITÁCORA Y BÚSQUEDA DE PDF) */}
                         <div className="lg:col-span-8 bg-white/85 backdrop-blur-md rounded-2xl border border-gray-200/80 shadow-sm flex flex-col overflow-hidden">
-                            
-                            {/* Cabecera Bitácora + Buscador */}
                             <div className="p-4 border-b border-gray-200/80 bg-gray-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                                 <div>
                                     <h2 className="font-['Playfair_Display'] text-base font-bold text-[#621132] flex items-center gap-2">
@@ -522,7 +608,6 @@ export default function ManifiestosIndex({ auth }) {
                                     </span>
                                 </div>
 
-                                {/* Buscador / Filtro */}
                                 <div className="relative w-full sm:w-64">
                                     <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs"></i>
                                     <input 
@@ -543,34 +628,34 @@ export default function ManifiestosIndex({ auth }) {
                                 </div>
                             </div>
 
-                            {/* Lista de Registros / Tabla */}
                             <div className="flex-grow overflow-y-auto p-4 space-y-3">
                                 {bitacoraFiltrada.length > 0 ? (
-                                    bitacoraFiltrada.map((item) => (
+                                    bitacoraFiltrada.map((item, idx) => (
                                         <div 
-                                            key={item.id}
+                                            key={item.id || idx}
                                             className="bg-white rounded-xl border border-gray-200/70 p-3.5 hover:border-[#B38E5D] transition-all shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 group"
                                         >
                                             <div className="space-y-1 flex-grow">
                                                 <div className="flex items-center gap-2">
                                                     <span className="px-2 py-0.5 bg-[#621132]/10 text-[#621132] font-bold text-[0.65rem] rounded-md">
-                                                        Pedimento: {item.pedimento}
+                                                        Pedimento: {item.pedimento || 'N/A'}
                                                     </span>
-                                                    <span className="text-[0.65rem] text-gray-400">• {item.fecha}</span>
+                                                    <span className="text-[0.65rem] text-gray-400">• ID: {item.id}</span>
                                                 </div>
-                                                <h4 className="font-semibold text-xs text-gray-800">{item.empresa}</h4>
+                                                <h4 className="font-semibold text-xs text-gray-800">{item.empresa || 'N/A'}</h4>
                                                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-[0.7rem] text-gray-500">
-                                                    <span><strong className="text-gray-700">Fracción:</strong> {item.fraccion}</span>
-                                                    <span><strong className="text-gray-700">Prod:</strong> {item.producto}</span>
-                                                    <span><strong className="text-gray-700">Origen:</strong> {item.pais}</span>
+                                                    <span><strong className="text-gray-700">Fracción:</strong> {item.n_fraccion || item.fraccion || 'N/A'}</span>
+                                                    <span><strong className="text-gray-700">Prod:</strong> {item.producto || 'N/A'}</span>
+                                                    <span><strong className="text-gray-700">Origen:</strong> {item.pais || 'N/A'}</span>
                                                 </div>
                                             </div>
 
-                                            {/* Monto y Botón PDF */}
                                             <div className="flex sm:flex-col items-end justify-between w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-100 gap-2 shrink-0">
                                                 <div className="text-right">
                                                     <span className="text-[0.65rem] uppercase text-gray-400 block">Total Liquidación</span>
-                                                    <span className="font-bold text-xs text-green-700">{item.totalMXN}</span>
+                                                    <span className="font-bold text-xs text-green-700">
+                                                        {item.totalMXN || `$${parseFloat(item.total_a_pagar_mxn || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })} MXN`}
+                                                    </span>
                                                 </div>
 
                                                 <button
@@ -591,27 +676,21 @@ export default function ManifiestosIndex({ auth }) {
                                     </div>
                                 )}
                             </div>
-
                         </div>
 
                     </div>
-
                 </main>
 
-                {/* FOOTER */}
                 <footer className="w-full text-center py-2.5 text-[0.7rem] text-gray-500 relative z-20 border-t border-gray-200/40 bg-white/50 shrink-0">
                     Centro de Procesamiento de Datos &copy; {new Date().getFullYear()}
                 </footer>
             </div>
 
-            {/* ==========================================
-                VENTANA EMERGENTE 1: MODAL CÁLCULO CUOTA
-            ========================================== */}
+            {/* MODAL CÁLCULO CUOTA */}
             {isCalcModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 overflow-y-auto">
                     <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                         
-                        {/* Header Modal */}
                         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                             <h2 className="font-['Playfair_Display'] text-xl font-bold text-[#621132] flex items-center gap-2">
                                 <i className="fa-solid fa-calculator text-[#B38E5D]"></i>
@@ -625,10 +704,7 @@ export default function ManifiestosIndex({ auth }) {
                             </button>
                         </div>
 
-                        {/* Body Modal */}
                         <div className="p-6 overflow-y-auto space-y-6 flex-grow">
-                            
-                            {/* SECCIÓN 1: IDENTIFICACIÓN */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                                 <div>
                                     <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">pedimento</label>
@@ -641,17 +717,45 @@ export default function ManifiestosIndex({ auth }) {
                                         className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-[#621132]"
                                     />
                                 </div>
-                                <div>
-                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">n_fraccion</label>
-                                    <input 
-                                        type="text" 
-                                        id="fraccion"
-                                        value={formData.fraccion} 
-                                        onChange={handleFraccionChange} 
-                                        placeholder="Ej. 7210.70.01"
-                                        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-[#621132]"
-                                    />
+
+                                <div className="relative" ref={dropdownRef}>
+                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">fracción arancelaria</label>
+                                    <div className="relative">
+                                        <input 
+                                            type="text" 
+                                            id="fraccion"
+                                            value={formData.fraccion} 
+                                            onChange={handleFraccionChange} 
+                                            onFocus={() => { if (fraccionesOptions.length > 0) setShowFraccionDropdown(true); }}
+                                            placeholder="Ej. 7210.70.01"
+                                            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:border-[#621132]"
+                                            autoComplete="off"
+                                        />
+                                        {isSearchingFraccion && (
+                                            <i className="fa-solid fa-spinner animate-spin absolute right-2.5 top-2.5 text-xs text-gray-400"></i>
+                                        )}
+                                    </div>
+
+                                    {showFraccionDropdown && (
+                                        <ul className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto text-xs">
+                                            {fraccionesOptions.length > 0 ? (
+                                                fraccionesOptions.map((item) => (
+                                                    <li 
+                                                        key={item.fraccion_arancelaria}
+                                                        onClick={() => handleSelectFraccion(item)}
+                                                        className="px-3 py-2 hover:bg-red-50 cursor-pointer border-b border-gray-100 last:border-0"
+                                                    >
+                                                        <span className="font-bold text-[#621132] block">{item.fraccion_arancelaria}</span>
+                                                        <span className="text-[0.65rem] text-gray-500 block truncate">{item.descripción}</span>
+                                                    </li>
+                                                ))
+                                            ) : (
+                                                <li className="px-3 py-2 text-gray-400 text-center">No se encontraron fracciones</li>
+                                            )}
+                                        </ul>
+                                    )}
                                 </div>
+
                                 <div>
                                     <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">operación</label>
                                     <select 
@@ -665,7 +769,7 @@ export default function ManifiestosIndex({ auth }) {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">capitulo</label>
+                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">capítulo</label>
                                     <input 
                                         type="text" 
                                         id="capitulo"
@@ -720,7 +824,7 @@ export default function ManifiestosIndex({ auth }) {
                                     />
                                 </div>
                                 <div className="sm:col-span-2">
-                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">pais</label>
+                                    <label className="block text-[0.7rem] font-bold uppercase text-gray-500 mb-1">país</label>
                                     <input 
                                         type="text" 
                                         id="pais"
@@ -743,7 +847,6 @@ export default function ManifiestosIndex({ auth }) {
                                 </div>
                             </div>
 
-                            {/* SECCIÓN 2: FÓRMULA DE CÁLCULO */}
                             <div className="pt-4 border-t border-gray-200">
                                 <h3 className="text-sm font-bold text-[#621132] flex items-center gap-2 mb-4">
                                     <i className="fa-solid fa-square-root-variable text-red-600"></i>
@@ -751,10 +854,7 @@ export default function ManifiestosIndex({ auth }) {
                                 </h3>
 
                                 <div className="space-y-4 bg-gray-50/50 p-4 rounded-xl border border-gray-200/60">
-                                    
-                                    {/* LÍNEA 1: CÁLCULO BASE */}
                                     <div className="flex flex-wrap md:flex-nowrap items-center gap-3">
-                                        
                                         <div className="w-full md:w-32">
                                             <label className="block text-[0.65rem] font-bold uppercase text-gray-500 mb-1">uma</label>
                                             <select 
@@ -838,13 +938,10 @@ export default function ManifiestosIndex({ auth }) {
                                                 className="w-full bg-red-50/50 border border-red-200 text-[#621132] font-bold rounded-lg px-2.5 py-1.5 text-xs"
                                             />
                                         </div>
-
                                     </div>
 
-                                    {/* LÍNEA 2: CONVERSIÓN A PESOS */}
                                     {showConversion && (
                                         <div className="flex flex-wrap md:flex-nowrap items-center gap-3 pt-2 border-t border-gray-200/50">
-                                            
                                             <div className="w-full md:w-48">
                                                 <label className="block text-[0.65rem] font-bold uppercase text-[#621132]">monto cuota (USD)</label>
                                                 <input 
@@ -881,38 +978,40 @@ export default function ManifiestosIndex({ auth }) {
                                                     className="w-full bg-green-700 border border-green-800 text-white font-bold rounded-lg px-3 py-1.5 text-xs shadow-xs"
                                                 />
                                             </div>
-
                                         </div>
                                     )}
-
                                 </div>
                             </div>
-
                         </div>
 
-                        {/* Footer Modal */}
-                        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
+                        {/* PIE DEL MODAL */}
+                        <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end gap-3">
                             <button 
                                 type="button" 
-                                onClick={guardarFichaYGenerarPDF}
-                                className="px-5 py-2.5 bg-[#621132] hover:bg-[#4d0d27] text-white text-xs font-semibold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
+                                onClick={handleGuardarEnBD}
+                                disabled={isSaving}
+                                className="px-5 py-2.5 bg-[#621132] hover:bg-[#4d0d27] disabled:bg-gray-400 text-white text-xs font-semibold rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer"
                             >
-                                <i className="fa-solid fa-file-pdf"></i> Guardar en Bitácora y Descargar PDF
+                                <i className="fa-solid fa-floppy-disk"></i>
+                                {isSaving ? 'Guardando...' : 'Guardar en Bitácora'}
+                            </button>
+
+                            <button 
+                                type="button" 
+                                onClick={() => generarPDF()}
+                                className="px-5 py-2.5 bg-red-50 hover:bg-red-100 text-[#621132] text-xs font-semibold rounded-xl border border-red-200/80 shadow-xs transition-all flex items-center gap-2 cursor-pointer"
+                            >
+                                <i className="fa-solid fa-file-pdf"></i> PDF
                             </button>
                         </div>
-
                     </div>
                 </div>
             )}
 
-            {/* ==========================================
-                VENTANA EMERGENTE 2: MODAL VERIFICADOR DE DOCUMENTOS
-            ========================================== */}
+            {/* MODAL VERIFICADOR DE DOCUMENTOS */}
             {isDocModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 overflow-y-auto">
                     <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                        
-                        {/* Header Modal */}
                         <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                             <h2 className="font-['Playfair_Display'] text-xl font-bold text-[#621132] flex items-center gap-2">
                                 <i className="fa-solid fa-shield-halved text-[#B38E5D]"></i>
@@ -926,13 +1025,11 @@ export default function ManifiestosIndex({ auth }) {
                             </button>
                         </div>
 
-                        {/* Body Modal */}
                         <div className="p-6 overflow-y-auto space-y-5 flex-grow">
                             <p className="text-xs text-gray-600">
                                 Sube un documento (PDF o Imagen) para analizarlo mediante el API local en busca de inconsistencias o modificaciones.
                             </p>
 
-                            {/* Formulario de Carga */}
                             <form onSubmit={handleDocSubmit} className="flex flex-col gap-4">
                                 <label className="block">
                                     <span className="sr-only">Elige un archivo</span>
@@ -955,28 +1052,23 @@ export default function ManifiestosIndex({ auth }) {
                                 </button>
                             </form>
 
-                            {/* Indicator Spinner */}
                             {docLoading && (
                                 <div className="text-center py-4 bg-gray-50 rounded-xl border border-gray-200">
                                     <p className="text-xs text-[#621132] font-semibold animate-pulse flex items-center justify-center gap-2">
-                                        <i className="fa-solid fa-spinner animate-spin"></i>
+                                        <i className="fa-solid fa-[#621132] fa-spinner animate-spin"></i>
                                         Analizando documento en busca de alteraciones...
                                     </p>
                                 </div>
                             )}
 
-                            {/* Alerta de Error de Conexión */}
                             {docError && (
                                 <div className="bg-amber-50 border-l-4 border-amber-500 p-3 rounded-lg text-amber-800 text-xs">
                                     <p className="font-semibold">{docError}</p>
                                 </div>
                             )}
 
-                            {/* Sección de Resultados / Alertas */}
                             {docResult && (
                                 <div className="rounded-xl border border-gray-200 p-4 bg-white shadow-xs space-y-3">
-                                    
-                                    {/* Caja de Estado */}
                                     <div className={`p-3.5 rounded-xl border-l-4 flex items-start gap-3 ${
                                         docResult.isAltered 
                                             ? 'bg-red-50 border-red-500 text-red-800' 
@@ -993,7 +1085,6 @@ export default function ManifiestosIndex({ auth }) {
                                         </div>
                                     </div>
 
-                                    {/* Lista de Detalles Técnicos */}
                                     {docResult.details && docResult.details.length > 0 && (
                                         <div className="border-t border-gray-100 pt-3">
                                             <h4 className="font-semibold text-gray-700 text-xs mb-1.5 uppercase tracking-wider">
@@ -1006,13 +1097,10 @@ export default function ManifiestosIndex({ auth }) {
                                             </ul>
                                         </div>
                                     )}
-
                                 </div>
                             )}
-
                         </div>
 
-                        {/* Footer Modal */}
                         <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex justify-end">
                             <button 
                                 type="button" 
@@ -1022,7 +1110,6 @@ export default function ManifiestosIndex({ auth }) {
                                 Cerrar
                             </button>
                         </div>
-
                     </div>
                 </div>
             )}
